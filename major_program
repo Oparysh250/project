@@ -1,0 +1,420 @@
+# ===== КОНВЕРТЕР HTML → TXT (три папки, имя из заголовка HTML) =====
+# Пользователь раскладывает файлы по трём папкам:
+#   /content/html_data_1/
+#   /content/html_data_2/
+#   /content/html_data_3/
+# Название чата определяется из заголовка внутри каждого HTML-файла
+!pip install 'pymystem3'
+from google.colab import files
+from bs4 import BeautifulSoup
+from collections import Counter
+from sklearn.feature_extraction.text import TfidfVectorizer
+import re
+import nltk
+from pymystem3 import Mystem
+import os
+from datetime import datetime
+import json
+from collections import defaultdict
+from nltk.corpus import stopwords
+nltk.download('stopwords')
+print("✅ Библиотеки загружены")
+
+# Папки с исходными HTML-файлами (пользователь создаёт их вручную)
+INPUT_FOLDERS = [
+    '/content/html_data_1/',
+    '/content/html_data_2/',
+    '/content/html_data_3/'
+]
+
+# Папка для выходных TXT-файлов
+OUTPUT_FOLDER = '/content/txt_data/'
+
+# Создаём выходную папку, если её нет
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# Словарь: ключ — имя чата (из заголовка), значение — список сообщений
+chat_messages = defaultdict(list)
+
+# Обрабатываем каждую папку
+for input_folder in INPUT_FOLDERS:
+    if not os.path.exists(input_folder):
+        print(f"⚠️ Папка {input_folder} не найдена, пропускаем...")
+        continue
+
+    print(f"\n📁 Работаем с папкой: {input_folder}")
+
+    for filename in os.listdir(input_folder):
+        if not filename.endswith(('.html', '.htm')):
+            continue
+
+        input_path = os.path.join(input_folder, filename)
+        print(f"   🔄 Обрабатываю: {filename}")
+
+        with open(input_path, 'r', encoding='utf-8') as f:
+            soup = BeautifulSoup(f.read(), 'html.parser')
+
+        # --- Извлекаем название чата из заголовка HTML ---
+        chat_name = "unknown"
+        header = soup.find('div', class_='page_header')
+        if header:
+            title_div = header.find('div', class_='text bold')
+            if title_div:
+                raw_name = title_div.get_text(strip=True)
+                # Убираем слово "Chat" и лишние пробелы, приводим к нижнему регистру
+                chat_name = re.sub(r'\s*Chat\s*', '', raw_name, flags=re.IGNORECASE)
+                chat_name = chat_name.strip().lower()
+                # Заменяем пробелы и небуквенные символы на подчёркивания
+                chat_name = re.sub(r'[^\w]', '_', chat_name)
+                # Убираем множественные подчёркивания
+                chat_name = re.sub(r'_+', '_', chat_name)
+
+        # --- Извлекаем сообщения ---
+        file_messages = []
+        for msg in soup.find_all('div', class_='message'):
+            text_tag = msg.find('div', class_='text')
+            if text_tag:
+                text = text_tag.get_text(strip=True)
+                if text:
+                    file_messages.append(text)
+
+        print(f"      Чат: {chat_name}, сообщений: {len(file_messages)}")
+
+        # Добавляем сообщения в общий список для данного чата
+        chat_messages[chat_name].extend(file_messages)
+
+# --- Сохраняем каждый чат в отдельный TXT-файл ---
+print("\n💾 Сохраняем TXT-файлы...")
+for chat_name, messages in chat_messages.items():
+    # Очищаем имя файла от недопустимых символов
+    safe_name = re.sub(r'[^\w\-]', '_', chat_name)
+    output_file = os.path.join(OUTPUT_FOLDER, f"{safe_name}.txt")
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(messages))
+    print(f"   ✅ {safe_name}.txt — сообщений: {len(messages)}")
+
+print(f"\n✅ Конвертация завершена")
+print(f"📁 TXT-файлы сохранены в папке: {OUTPUT_FOLDER}")
+# ===== ОСНОВНАЯ ПРОГРАММА АНАЛИЗА (с группировкой и JSON) =====
+
+import re
+import nltk
+from sklearn.feature_extraction.text import TfidfVectorizer
+from pymystem3 import Mystem
+from collections import Counter
+from datetime import datetime
+import os
+import json
+
+# Скачиваем стоп-слова
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+
+# ===== ЛЕММАТИЗАТОР =====
+mystem = Mystem()
+
+def lemmatize_text(text):
+    """Приводит слова к начальной форме"""
+    lemmas = mystem.lemmatize(text)
+    result = ''.join(lemmas).strip()
+    return result
+
+# ===== ЗАГРУЗКА ДАННЫХ =====
+folder = '/content/txt_data/'  # ← изменено
+all_messages = []
+
+for filename in os.listdir(folder):
+    if filename.endswith('.txt'):
+        source = filename[:-4]  # имя чата из имени файла
+        file_path = os.path.join(folder, filename)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        for line in lines:
+            text = line.strip()
+            if text:
+                all_messages.append((text, source))
+
+print(f"📖 Загружено сообщений: {len(all_messages)}")
+
+# ===== ОЧИСТКА, ЛЕММАТИЗАЦИЯ И ФИЛЬТРАЦИЯ =====
+useful_texts = []      # очищенные сообщения (без лемматизации)
+questions_original = []  # оригинальные вопросы (без лемматизации)
+questions_lemmatized = [] # лемматизированные вопросы (для TF-IDF и нормализации)
+questions_source = []    # источник для каждого вопроса
+
+for text, src in all_messages:
+    if not text:
+        continue
+
+    # Проверяем, полезное ли сообщение (используем is_useful из ячейки 2)
+    if is_useful(text):
+        # Приводим к нижнему регистру
+        text_lower = text.lower()
+
+        # Оставляем только русские буквы и ?
+        text_clean = re.sub(r'[^а-яё\?]', ' ', text_lower)
+
+        # Убираем лишние пробелы
+        text_clean = ' '.join(text_clean.split())
+
+        # Оставляем только русские слова (и вопросительный знак)
+        words = text_clean.split()
+        russian_words = []
+        for word in words:
+            if re.search(r'[а-яА-Я?]', word):
+                russian_words.append(word)
+
+        if len(russian_words) >= 3:
+            clean_text = ' '.join(russian_words)
+            useful_texts.append(clean_text)
+
+            # Если есть ? — это вопрос
+            if '?' in clean_text:
+                questions_original.append(clean_text)
+                # Лемматизируем для дальнейшего анализа
+                lemmatized = lemmatize_text(clean_text)
+                questions_lemmatized.append(lemmatized)
+                questions_source.append(src)
+def get_keywords(question):
+    """Генерирует ключевые слова из вопроса"""
+    lemmatized = lemmatize_text(question.lower())
+    norm = normalize_question(lemmatized)
+    return norm.split()
+print(f"\n📊 Статистика после очистки:")
+print(f"   Полезных сообщений: {len(useful_texts)}")
+print(f"   Вопросов (оригинальных): {len(questions_original)}")
+print(f"   Вопросов (лемматизированных): {len(questions_lemmatized)}")
+
+# ===== СТОП-СЛОВА =====
+russian_stopwords = stopwords.words('russian')
+
+extra_stopwords = [
+    # Разговорные и служебные
+    'типа', 'короче', 'кстати', 'блин', 'жесть', 'вау', 'ого', 'ага', 'угу',
+    'ок', 'окей', 'ладно', 'норм', 'спс', 'пж', 'пожалуйста', 'извини',
+    'привет', 'здарова', 'пока', 'слушай', 'слышь',
+    'вроде', 'именно', 'сильно', 'каждый', 'новый', 'самый',
+
+    # Глаголы
+    'сказать', 'спросить', 'ответить', 'говорить',
+    'думать', 'знать', 'понять', 'мочь', 'делать', 'хотеть', 'давать',
+    'мирэа', 'понимать', 'сколько', 'получать', 'реально', 'нужно',
+    'скидывать', 'брать', 'взять', 'ставить', 'отвечать', 'сделать',
+    'сделал', 'сделала', 'сделано', 'закрывать', 'стоять',
+
+    # Существительные
+    'вопрос', 'ответ', 'дело', 'смысл', 'суть', 'принцип', 'счёт', 'повод',
+    'тема', 'момент', 'вариант', 'ситуация', 'весь', 'человек', 'пост', 'год',
+    'кр', 'лаб', 'никто', 'типо', 'шарить', 'экз', 'варик', 'бля', 'чо',
+    'скок',  'фотка',  'тесто',  'чач',
+    'номер', 'число', 'время', 'день', 'неделя', 'месяц', 'решение',
+    'задача', 'задание', 'оно', 'твой', 'прямой', '?',
+
+    # Время
+    'сегодня', 'завтра', 'вчера', 'потом', 'сейчас',
+
+    # Наречия и частицы
+    'вообще', 'конечно', 'наверное', 'почему', 'че', 'первый', 'свой',
+    'туда', 'сюда', 'ебать', 'лс', 'час', 'хотя', 'правда',
+
+    # Дополнительные
+    'это', 'весь', 'делать', 'хотеть', 'который', 'просто', 'давать',
+    'подсказывать', 'пост', 'тип', 'ребята',  'норма',
+    'насколько', 'находить', 'рассказывать', 'очень', 'второй',
+    'щас', 'ничто','либо', 'мб', 'случай', 'фото','хуйня','хуй',
+    'похуй','наш', 'ваш', 'народ', 'помощь', 'чело', 'ващ', 'разный',
+    'сесть','слышать', 'нормально', 'случайно', 'далеко', 'прикол',
+    'вид','ток','точно', 'сие', 'кирилл', 'например', 'спасибо',
+    'иметь', 'любой', 'хороший', 'нормальный', 'возможно', 'сразу', 'большой',
+    'мало', 'голова', 'примерно', 'также','нужный','смочь','должный','поставлять',
+    'блять','го','смотреть',
+]
+# ===== КАТЕГОРИЗАЦИЯ =====
+
+categories = {
+  
+        "навигация": [
+        "корпус", "аудитория", "кабинет", "расписание", "место", "пара", "идти",
+        "ходить", "пойти", "приходить", "выходить", "уходить", "начинаться",
+        "вернадка", "вуз", "институт"
+    ],
+    "экзамены": [
+        "экзамен", "зачет", "пересдача", "пересдавать", "сессия", "билет", "тест",
+        "допуск", "сдача", "автомат", "контрольный", "оценка", "балл", "тройка",
+        "шанс", "итог", "результат"
+    ],
+    "преподаватели": [
+        "препод", "преподаватель", "кафедра", "рубан", "выборнов", "мужик",
+        "товарищ", "спрашивать", "объяснять", "помогать", "проверять", "вести",
+        "принимать", "добрый"
+    ],
+    "учебный_процесс": [
+        "учеба", "обучение", "курс", "семинар", "практика", "занятие", "предмет",
+        "направление", "профиль", "семестр", "посещение", "долг", "сложно",
+        "сложный", "учить", "учиться", "заниматься", "готовиться", "начинать",
+        "проходить", "получаться", "становиться", "оставаться", "происходить",
+        "обязательно", "возможность"
+    ],
+    "ит_системы": [
+        "сдо", "брс", "система", "сайт", "чат", "файл", "почта", "данные", "сеть",
+        "отправлять", "информация", "модель", "код", "программа", "база", "ссылка"
+    ],
+    "бюрократия": [
+        "документ", "справка", "зачетка", "ступак", "отдел", "бюджет", "отчислять",
+        "переводиться", "поступать", "деньги", "купить", "список", "план", "оценка"
+    ],
+    "общежитие": [
+        "общага", "стромынка", "жить", "жизнь", "комната", "сосед"
+    ],
+    "лекции": [
+        "лекция", "лектор", "конспект", "тетрадь", "слушать", "читать", "записывать",
+        "теория", "пример", "формула"]
+  
+}
+
+def categorize_question(question):
+    """
+    Определяет категорию вопроса на основе наличия ключевых слов.
+    Возвращает название категории.
+    """
+    words = set(question.split())
+    for cat, keywords in categories.items():
+        if any(kw in words for kw in keywords):
+            return cat
+    return 'другое'
+russian_stopwords.extend(extra_stopwords)
+stop_words_set = set(russian_stopwords)
+
+# ===== НОРМАЛИЗАЦИЯ ВОПРОСА ДЛЯ ГРУППИРОВКИ =====
+def normalize_question(question):
+    """Приводит вопрос к каноническому виду: лемматизация + удаление стоп-слов + сортировка слов"""
+    words = question.split()
+    filtered = [w for w in words if w not in stop_words_set]
+    filtered.sort()
+    return ' '.join(filtered)
+
+# ===== ГРУППИРОВКА ВОПРОСОВ =====
+groups = {}  # ключ: нормализованная строка, значение: dict с original, count, source
+
+for i, orig_q in enumerate(questions_original):
+    lemm_q = questions_lemmatized[i]
+    norm = normalize_question(lemm_q)
+    src = questions_source[i]
+
+    if norm not in groups:
+        groups[norm] = {
+            'original': orig_q,
+            'count': 1,
+            'source': src,          # сохраняем источник первого вопроса
+        }
+    else:
+        groups[norm]['count'] += 1
+        # Если текущий вопрос длиннее сохранённого — заменяем и обновляем источник
+        if len(orig_q) > len(groups[norm]['original']):
+            groups[norm]['original'] = orig_q
+            groups[norm]['source'] = src   # источник обновляем вместе с вопросом
+
+print(f"\n📦 Сформировано групп вопросов: {len(groups)}")
+
+# ===== ФОРМИРОВАНИЕ JSON =====
+json_data = []
+for idx, (norm, info) in enumerate(groups.items(), start=1):
+    if categorize_question(norm) == 'другое':
+      continue
+    json_data.append({
+        "id": idx,
+        "question": info['original'],
+        "keywords": list(set((lemmatize_text(info['original']).split()))&set((categories[categorize_question(norm)]))),
+        "category": categorize_question(norm),   # norm — нормализованная строка (лемматизированная, без стоп-слов)
+        "source": 'chat_'+info['source'],
+        "frequency": info['count']
+    })
+
+# Сохраняем JSON в файл
+json_filename = "student_questions.json"
+with open(json_filename, 'w', encoding='utf-8') as f:
+    json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+print(f"\n💾 JSON файл создан: {json_filename}")
+print(f"📁 Размер файла: {os.path.getsize(json_filename)/1024:.1f} KB")
+
+# Скачиваем JSON (опционально)
+from google.colab import files
+files.download(json_filename)
+print("📥 JSON скачивается...")
+# ===== ФУНКЦИЯ ДЕДУПЛИКАЦИИ =====
+def deduplicate(entries, threshold=85):
+    unique = []
+    removed = 0
+    for entry in entries:
+        kw1 = set(entry.get('keywords', []))
+        is_duplicate = False
+        for existing in unique:
+            kw2 = set(existing.get('keywords', []))
+            if not kw1 or not kw2:
+                continue
+            common = kw1 & kw2
+            max_len = max(len(kw1), len(kw2))
+            percent = (len(common) / max_len) * 100 if max_len > 0 else 0
+            if percent >= threshold:
+                is_duplicate = True
+                removed += 1
+                break
+        if not is_duplicate:
+            unique.append(entry)
+    return unique, removed
+
+# ===== ОСНОВНАЯ ФУНКЦИЯ КОНВЕРТАЦИИ =====
+
+def convert_chats(input_file='student_questions.json', output_file='faq.json', min_frequency=2):
+    print(f"🔄 Загружаем {input_file}...")
+    with open(input_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    print(f"📖 Загружено записей: {len(data)}")
+
+    # Фильтрация по частоте
+    filtered = [item for item in data if item.get('frequency', 1) >= min_frequency]
+    print(f"📊 После фильтрации (frequency >= {min_frequency}): {len(filtered)}")
+
+    # Конвертация
+    faq_entries = []
+    skipped = 0
+    new_id = 0
+    for item in filtered:
+        question = item.get('question', '')
+        if not question:
+            skipped += 1
+            continue
+        faq_entries.append({
+            "id": new_id,
+            "question": question,
+            "answer": "None",
+            "keywords": list(set(lemmatize_text(question).split()) & set(categories[categorize_question(lemmatize_text(question))])),
+            "category": item.get('category'),
+            "source": "chat_" + item.get('source', 'unknown')
+        })
+        new_id += 1
+
+    print(f"✅ Конвертировано: {len(faq_entries)}")
+    if skipped:
+        print(f"⚠️ Пропущено (пустой вопрос): {skipped}")
+
+    # === ДЕДУПЛИКАЦИЯ ===
+    unique_entries, removed_count = deduplicate(faq_entries, threshold=85)
+    print(f"🧹 Удалено дублей: {removed_count}")
+    print(f"📊 Итоговое количество записей: {len(unique_entries)}")
+
+    # Сохранение
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(unique_entries, f, ensure_ascii=False, indent=2)
+
+    print(f"💾 Сохранено в {output_file}")
+
+    if unique_entries:
+        print("\n📝 Пример первой записи:")
+        print(json.dumps(unique_entries[0], ensure_ascii=False, indent=2))
+
+    return unique_entries
+
+if __name__ == "__main__":
+    convert_chats()
