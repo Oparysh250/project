@@ -1,0 +1,128 @@
+# @title
+# ===== TF-IDF АНАЛИЗ (для подбора категорий) =====
+
+import re
+import nltk
+from sklearn.feature_extraction.text import TfidfVectorizer
+from pymystem3 import Mystem
+import os
+
+# Скачиваем стоп-слова (если ещё не скачаны)
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+
+# ===== ЛЕММАТИЗАТОР =====
+mystem = Mystem()
+def lemmatize_text(text):
+    lemmas = mystem.lemmatize(text)
+    return ''.join(lemmas).strip()
+
+# ===== ЗАГРУЗКА ДАННЫХ =====
+folder = '/content/txt_data/'   # папка, куда ячейка 3 сохранила TXT-файлы
+all_messages = []
+
+for filename in os.listdir(folder):
+    if filename.endswith('.txt'):
+        file_path = os.path.join(folder, filename)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        for line in lines:
+            text = line.strip()
+            if text:
+                all_messages.append(text)
+
+print(f"📖 Загружено сообщений: {len(all_messages)}")
+
+# ===== ОЧИСТКА, ЛЕММАТИЗАЦИЯ, ОТБОР ВОПРОСОВ =====
+questions = []
+for text in all_messages:
+    # Приводим к нижнему регистру
+    text = text.lower()
+    # Оставляем только русские буквы и ?
+    text = re.sub(r'[^а-яё\?]', ' ', text)
+    text = ' '.join(text.split())
+    # Оставляем только русские слова (и ?) и длину >= 3 слов
+    words = text.split()
+    russian_words = [w for w in words if re.search(r'[а-яА-Я?]', w)]
+    if len(russian_words) >= 3 and '?' in text:
+        clean_text = ' '.join(russian_words)
+        lemmatized = lemmatize_text(clean_text)
+        questions.append(lemmatized)
+
+print(f"📊 Вопросов (после лемматизации): {len(questions)}")
+
+# ===== СТОП-СЛОВА =====
+russian_stopwords = stopwords.words('russian')
+
+extra_stopwords = [
+    # Разговорные и служебные
+    'типа', 'короче', 'кстати', 'блин', 'жесть', 'вау', 'ого', 'ага', 'угу',
+    'ок', 'окей', 'ладно', 'норм', 'спс', 'пж', 'пожалуйста', 'извини',
+    'привет', 'здарова', 'пока', 'слушай', 'слышь',
+    'вроде', 'именно', 'сильно', 'каждый', 'новый', 'самый',
+
+    # Глаголы
+    'сказать', 'спросить', 'ответить', 'говорить',
+    'думать', 'знать', 'понять', 'мочь', 'делать', 'хотеть', 'давать',
+    'мирэа', 'понимать', 'сколько', 'получать', 'реально', 'нужно',
+    'скидывать', 'брать', 'взять', 'ставить', 'отвечать', 'сделать',
+    'сделал', 'сделала', 'сделано', 'закрывать', 'стоять',
+
+    # Существительные
+    'вопрос', 'ответ', 'дело', 'смысл', 'суть', 'принцип', 'счёт', 'повод',
+    'тема', 'момент', 'вариант', 'ситуация', 'весь', 'человек', 'пост', 'год',
+    'кр', 'лаб', 'никто', 'типо', 'шарить', 'экз', 'варик', 'бля', 'чо',
+    'скок',  'фотка',  'тесто',  'чач',
+    'номер', 'число', 'время', 'день', 'неделя', 'месяц', 'решение',
+    'задача', 'задание', 'оно', 'твой', 'прямой', '?',
+
+    # Время
+    'сегодня', 'завтра', 'вчера', 'потом', 'сейчас',
+
+    # Наречия и частицы
+    'вообще', 'конечно', 'наверное', 'почему', 'че', 'первый', 'свой',
+    'туда', 'сюда', 'ебать', 'лс', 'час', 'хотя', 'правда',
+
+    # Дополнительные
+    'это', 'весь', 'делать', 'хотеть', 'который', 'просто', 'давать',
+    'подсказывать', 'пост', 'тип', 'ребята',  'норма',
+    'насколько', 'находить', 'рассказывать', 'очень', 'второй',
+    'щас', 'ничто','либо', 'мб', 'случай', 'фото','хуйня','хуй',
+    'похуй','наш', 'ваш', 'народ', 'помощь', 'чело', 'ващ', 'разный',
+    'сесть','слышать', 'нормально', 'случайно', 'далеко', 'прикол',
+    'вид','ток','точно', 'сие', 'кирилл', 'например', 'спасибо',
+    'иметь', 'любой', 'хороший', 'нормальный', 'возможно', 'сразу', 'большой',
+    'мало', 'голова', 'примерно', 'также','нужный','смочь','должный','поставлять',
+    'блять','го','смотреть',
+]
+russian_stopwords.extend(extra_stopwords)
+
+# ===== TF-IDF =====
+if len(questions) > 5:
+    vectorizer = TfidfVectorizer(
+        max_features=200,
+        stop_words=russian_stopwords
+    )
+    tfidf_matrix = vectorizer.fit_transform(questions)
+    feature_names = vectorizer.get_feature_names_out()
+    word_importance = list(zip(feature_names, tfidf_matrix.sum(axis=0).tolist()[0]))
+    word_importance.sort(key=lambda x: x[1], reverse=True)
+
+    print("\n🎯 ТОП-200 ВАЖНЫХ СЛОВ (после стоп-слов и лемматизации):")
+    print("-" * 60)
+    for i, (word, weight) in enumerate(word_importance[:200], 1):
+        count = sum(1 for q in questions if word in q.split())
+        print(f"{i:3d}. {word:15} | вес: {weight:6.4f} | встречается: {count:4d} раз")
+
+    # Вывод статистики по источникам
+    print("\n📁 Статистика по папкам:")
+    for filename in os.listdir(folder):
+        if filename.endswith('.txt'):
+            file_path = os.path.join(folder, filename)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            msg_count = len([l for l in lines if l.strip()])
+            print(f"   {filename}: {msg_count} сообщений")
+
+else:
+    print("⚠️ Недостаточно вопросов для анализа.")
