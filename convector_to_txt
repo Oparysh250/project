@@ -1,0 +1,97 @@
+# ===== КОНВЕРТЕР HTML → TXT (три папки, имя из заголовка HTML) =====
+# Пользователь раскладывает файлы по трём папкам:
+#   /content/html_data_1/
+#   /content/html_data_2/
+#   /content/html_data_3/
+# Название чата определяется из заголовка внутри каждого HTML-файла
+!pip install 'pymystem3'
+from google.colab import files
+from bs4 import BeautifulSoup
+from collections import Counter
+from sklearn.feature_extraction.text import TfidfVectorizer
+import re
+import nltk
+from pymystem3 import Mystem
+import os
+from datetime import datetime
+import json
+from collections import defaultdict
+from nltk.corpus import stopwords
+nltk.download('stopwords')
+print("✅ Библиотеки загружены")
+
+# Папки с исходными HTML-файлами (пользователь создаёт их вручную)
+INPUT_FOLDERS = [
+    '/content/html_data_1/',
+    '/content/html_data_2/',
+    '/content/html_data_3/'
+]
+
+# Папка для выходных TXT-файлов
+OUTPUT_FOLDER = '/content/txt_data/'
+
+# Создаём выходную папку, если её нет
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# Словарь: ключ — имя чата (из заголовка), значение — список сообщений
+chat_messages = defaultdict(list)
+
+# Обрабатываем каждую папку
+for input_folder in INPUT_FOLDERS:
+    if not os.path.exists(input_folder):
+        print(f"⚠️ Папка {input_folder} не найдена, пропускаем...")
+        continue
+
+    print(f"\n📁 Работаем с папкой: {input_folder}")
+
+    for filename in os.listdir(input_folder):
+        if not filename.endswith(('.html', '.htm')):
+            continue
+
+        input_path = os.path.join(input_folder, filename)
+        print(f"   🔄 Обрабатываю: {filename}")
+
+        with open(input_path, 'r', encoding='utf-8') as f:
+            soup = BeautifulSoup(f.read(), 'html.parser')
+
+        # --- Извлекаем название чата из заголовка HTML ---
+        chat_name = "unknown"
+        header = soup.find('div', class_='page_header')
+        if header:
+            title_div = header.find('div', class_='text bold')
+            if title_div:
+                raw_name = title_div.get_text(strip=True)
+                # Убираем слово "Chat" и лишние пробелы, приводим к нижнему регистру
+                chat_name = re.sub(r'\s*Chat\s*', '', raw_name, flags=re.IGNORECASE)
+                chat_name = chat_name.strip().lower()
+                # Заменяем пробелы и небуквенные символы на подчёркивания
+                chat_name = re.sub(r'[^\w]', '_', chat_name)
+                # Убираем множественные подчёркивания
+                chat_name = re.sub(r'_+', '_', chat_name)
+
+        # --- Извлекаем сообщения ---
+        file_messages = []
+        for msg in soup.find_all('div', class_='message'):
+            text_tag = msg.find('div', class_='text')
+            if text_tag:
+                text = text_tag.get_text(strip=True)
+                if text:
+                    file_messages.append(text)
+
+        print(f"      Чат: {chat_name}, сообщений: {len(file_messages)}")
+
+        # Добавляем сообщения в общий список для данного чата
+        chat_messages[chat_name].extend(file_messages)
+
+# --- Сохраняем каждый чат в отдельный TXT-файл ---
+print("\n💾 Сохраняем TXT-файлы...")
+for chat_name, messages in chat_messages.items():
+    # Очищаем имя файла от недопустимых символов
+    safe_name = re.sub(r'[^\w\-]', '_', chat_name)
+    output_file = os.path.join(OUTPUT_FOLDER, f"{safe_name}.txt")
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(messages))
+    print(f"   ✅ {safe_name}.txt — сообщений: {len(messages)}")
+
+print(f"\n✅ Конвертация завершена")
+print(f"📁 TXT-файлы сохранены в папке: {OUTPUT_FOLDER}")
