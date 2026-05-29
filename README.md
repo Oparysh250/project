@@ -22,9 +22,9 @@
 **Как создать папку в Colab:**
 
 ```python
-!mkdir -p /content/html_data_PD
-!mkdir -p /content/html_data_IIT
-!mkdir -p /content/html_data_EX
+!mkdir -p /content/html_data_1
+!mkdir -p /content/html_data_2
+!mkdir -p /content/html_data_3
 ## Запуск
 
 Для получения итогового `faq.json` достаточно выполнить `major_program`. Конвертер (`convector_to_txt`) и TF-IDF-анализ не обязательны — они нужны только для проверки работы алгоритмов или повторного формирования словарей категорий.
