@@ -35,7 +35,32 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Словарь: ключ — имя чата (из заголовка), значение — список сообщений
 chat_messages = defaultdict(list)
+# @title Функция для проверки пригоности сообщений
+def is_useful(text):
+    """
+    Проверяет, полезно ли сообщение для анализа.
+    Сообщение полезно, если:
+    - В нём есть хотя бы одно русское слово
+    - Русские слова составляют >= 80% от всех слов
+    """
+    if not text or not text.strip():
+        return False
 
+    # Разбиваем на слова
+    words = text.split()
+    if not words:
+        return False
+
+    # Считаем русские слова
+    russian_count = 0
+    for word in words:
+        # Если есть хотя бы одна русская буква
+        if re.search(r'[а-яё]', word.lower()):
+            russian_count += 1
+
+    # Вычисляем процент русских слов
+    russian_percent = russian_count / len(words)
+    return russian_percent >= 0.8
 # Обрабатываем каждую папку
 for input_folder in INPUT_FOLDERS:
     if not os.path.exists(input_folder):
@@ -363,6 +388,7 @@ def deduplicate(entries, threshold=85):
         if not is_duplicate:
             unique.append(entry)
     return unique, removed
+# @title Функция для проверки пригоности сообщений
 
 # ===== ОСНОВНАЯ ФУНКЦИЯ КОНВЕРТАЦИИ =====
 
@@ -413,7 +439,9 @@ def convert_chats(input_file='student_questions.json', output_file='faq.json', m
     if unique_entries:
         print("\n📝 Пример первой записи:")
         print(json.dumps(unique_entries[0], ensure_ascii=False, indent=2))
-
+    from google.colab import files
+    files.download(output_file)
+    print(f"📥 {output_file} скачивается...")
     return unique_entries
 
 if __name__ == "__main__":
